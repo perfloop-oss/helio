@@ -190,6 +190,7 @@ class CredentialsProvider {
   virtual std::string ServiceEndpoint() const = 0;
 
   virtual void Sign(detail::HttpRequestBase* req) const = 0;
+
   // Returns true when the currently cached credentials should be refreshed
   // before signing another request.
   virtual bool IsExpired() const {

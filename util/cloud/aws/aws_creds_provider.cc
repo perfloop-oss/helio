@@ -259,6 +259,7 @@ AwsCredsProvider::~AwsCredsProvider() {
 }
 
 SSL_CTX* AwsCredsProvider::GetSslCtx() {
+  folly::RWSpinLock::WriteHolder lock(lock_);
   if (!ssl_ctx_)
     ssl_ctx_ = http::TlsClient::CreateSslContext();
   return ssl_ctx_;
@@ -338,8 +339,8 @@ error_code AwsCredsProvider::TryEnvironment() {
   {
     folly::RWSpinLock::WriteHolder lock(lock_);
     creds_ = std::move(creds);
+    source_ = CredSource::kEnv;
   }
-  source_ = CredSource::kEnv;
   LOG_FIRST_N(INFO, 1) << "aws: loaded credentials; provider=environment";
   return {};
 }
@@ -382,8 +383,8 @@ error_code AwsCredsProvider::TryProfileFile() {
   {
     folly::RWSpinLock::WriteHolder lock(lock_);
     creds_ = std::move(creds);
+    source_ = CredSource::kProfile;
   }
-  source_ = CredSource::kProfile;
   LOG_FIRST_N(INFO, 1) << "aws: loaded credentials; provider=profile file";
   return {};
 }
@@ -420,10 +421,8 @@ error_code AwsCredsProvider::TryWebIdentity() {
   {
     folly::RWSpinLock::WriteHolder lock(lock_);
     creds_ = std::move(creds);
+    source_ = CredSource::kWebIdentity;
   }
-  role_arn_ = role_arn;
-  web_identity_token_file_ = token_file;
-  source_ = CredSource::kWebIdentity;
   LOG_FIRST_N(INFO, 1) << "aws: loaded credentials; provider=web-identity";
   return {};
 }
@@ -452,8 +451,6 @@ error_code AwsCredsProvider::TryContainerCreds() {
     }
   }
 
-  container_uri_ = uri;
-
   // Determine if http or https.
   vector<pair<string, string>> headers;
   if (!auth_token.empty()) {
@@ -472,8 +469,8 @@ error_code AwsCredsProvider::TryContainerCreds() {
   {
     folly::RWSpinLock::WriteHolder lock(lock_);
     creds_ = std::move(creds);
+    source_ = CredSource::kContainer;
   }
-  source_ = CredSource::kContainer;
   LOG_FIRST_N(INFO, 1) << "aws: loaded credentials; provider=container-credentials";
   return {};
 }
@@ -497,15 +494,15 @@ error_code AwsCredsProvider::TryIMDS() {
     return role_name_res.error();
   string role_name_raw = std::move(*role_name_res);
 
-  imds_role_ = string(absl::StripAsciiWhitespace(role_name_raw));
-  if (imds_role_.empty()) {
+  string imds_role = string(absl::StripAsciiWhitespace(role_name_raw));
+  if (imds_role.empty()) {
     LOG(WARNING) << "aws: IMDS returned empty role name";
     return make_error_code(errc::not_supported);
   }
 
   // Get the credentials for the role.
   auto json = FetchUrl("169.254.169.254", "80",
-                       absl::StrCat("/latest/meta-data/iam/security-credentials/", imds_role_),
+                       absl::StrCat("/latest/meta-data/iam/security-credentials/", imds_role),
                        h2::verb::get, token_hdr, "", connect_ms_, nullptr);
   if (!json)
     return json.error();
@@ -516,14 +513,20 @@ error_code AwsCredsProvider::TryIMDS() {
   {
     folly::RWSpinLock::WriteHolder lock(lock_);
     creds_ = std::move(creds);
+    source_ = CredSource::kIMDS;
   }
-  source_ = CredSource::kIMDS;
-  LOG_FIRST_N(INFO, 1) << "aws: loaded credentials; provider=ec2-metadata; role=" << imds_role_;
+  LOG_FIRST_N(INFO, 1) << "aws: loaded credentials; provider=ec2-metadata; role=" << imds_role;
   return {};
 }
 
 error_code AwsCredsProvider::RefreshToken() {
-  switch (source_) {
+  CredSource source;
+  {
+    folly::RWSpinLock::ReadHolder lock(lock_);
+    source = source_;
+  }
+
+  switch (source) {
     case CredSource::kEnv:
     case CredSource::kProfile:
       return {};  // static credentials never expire

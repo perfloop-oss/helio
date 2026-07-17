@@ -15,14 +15,14 @@ struct AwsCredentials {
   std::string access_key_id;
   std::string secret_access_key;
   std::string session_token;  // empty for static credentials
-  time_t expiry = 0;          // 0 = no expiry; refreshed 30s early
+  time_t expiry = 0;          // 0 = no expiry; refreshed 1s early
 
   bool empty() const {
     return access_key_id.empty() || secret_access_key.empty();
   }
 
   bool IsExpired() const {
-    return expiry > 0 && time(nullptr) + 30 >= expiry;
+    return expiry > 0 && time(nullptr) + 1 >= expiry;
   }
 };
 
@@ -47,7 +47,7 @@ std::string StsEndpoint(std::string_view region);
 //
 // Sign() computes AWS Signature Version 4 on every call.
 // RefreshToken() re-fetches from whichever source originally succeeded.
-// Thread-safe: RWSpinLock guards creds_.
+// Thread-safe: RWSpinLock guards credential and refresh-source state.
 class AwsCredsProvider : public CredentialsProvider {
   AwsCredsProvider(const AwsCredsProvider&) = delete;
   AwsCredsProvider& operator=(const AwsCredsProvider&) = delete;
@@ -102,11 +102,6 @@ class AwsCredsProvider : public CredentialsProvider {
 
   enum class CredSource { kNone, kEnv, kProfile, kWebIdentity, kContainer, kIMDS };
   CredSource source_ = CredSource::kNone;
-
-  // Saved for RefreshToken():
-  std::string role_arn_, web_identity_token_file_;
-  std::string container_uri_;
-  std::string imds_role_;
 
   SSL_CTX* ssl_ctx_ = nullptr;
   mutable folly::RWSpinLock lock_;

@@ -142,8 +142,7 @@ error_code AbstractStorageFile::FillBuf(const uint8_t* buffer, size_t length) {
 
 }  // namespace detail
 
-bool CredentialsProvider::ShouldRefreshToken(
-    const h2::response<h2::string_body>& response) const {
+bool CredentialsProvider::ShouldRefreshToken(const h2::response<h2::string_body>& response) const {
   return IsUnauthorized(response);
 }
 
